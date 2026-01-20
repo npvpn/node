@@ -26,10 +26,27 @@ class XRayConfig(dict):
         self.peer_ip = peer_ip
 
         super().__init__(config)
+        self._apply_logging()
         self._apply_api()
 
     def to_json(self, **json_kwargs):
         return json.dumps(self, **json_kwargs)
+
+    def _apply_logging(self):
+        # Ensure logs go to stdout/stderr by default so /logs can stream "accepted ..." lines
+        log = self.get("log") or {}
+        if not self.get("log"):
+            self["log"] = log
+        # Standardize log level field and default to warning if unset
+        if not log.get("loglevel") and not log.get("logLevel"):
+            log["loglevel"] = "warning"
+        if log.get("loglevel") and not log.get("logLevel"):
+            log["logLevel"] = log["loglevel"]
+        # Default sinks if not provided
+        if not log.get("access"):
+            log["access"] = "/dev/stdout"
+        if not log.get("error"):
+            log["error"] = "/dev/stderr"
 
     def _apply_api(self):
         for inbound in self.get('inbounds', []).copy():
