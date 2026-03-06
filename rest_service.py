@@ -114,6 +114,10 @@ class Service(object):
     def start(self, session_id: UUID = Body(embed=True), config: str = Body(embed=True)):
         self.match_session_id(session_id)
 
+        # Core уже запущен — возвращаем успех, избегая 503 и цепочки restart
+        if self.core.started:
+            return self.response()
+        
         try:
             config = XRayConfig(config, self.client_ip)
         except json.decoder.JSONDecodeError as exc:
