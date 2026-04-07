@@ -1,9 +1,12 @@
 services:
   marzban-node:
     # build: .
-    image: gozargah/marzban-node:latest
+    image: npvpn/node:latest
     restart: always
     network_mode: host
+
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
     # env_file: .env
     environment:
@@ -14,3 +17,14 @@ services:
 
     volumes:
       - /var/lib/marzban-node:/var/lib/marzban-node
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "3600"
+      WATCHTOWER_LABEL_ENABLE: "true"
+    command: --label-enable
