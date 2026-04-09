@@ -7,6 +7,12 @@ on:
       - dev
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      xray_version:
+        description: "Xray version (e.g. v24.12.18), leave empty for Dockerfile default"
+        required: false
+        default: ""
 
 jobs:
   build-docker-image:
@@ -43,13 +49,25 @@ jobs:
           IMAGE_DH="${{ secrets.DOCKERHUB_USERNAME }}/node"
           IMAGE_GH="ghcr.io/${{ github.repository_owner }}/node"
 
-          if [[ "${GITHUB_REF}" == "refs/heads/dev" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "TAGS=$IMAGE_DH:latest,$IMAGE_GH:latest" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_REF}" == "refs/heads/dev" ]]; then
             echo "TAGS=$IMAGE_DH:dev,$IMAGE_GH:dev" >> $GITHUB_OUTPUT
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "TAGS=$IMAGE_DH:latest,$IMAGE_DH:${GITHUB_REF_NAME},$IMAGE_GH:latest,$IMAGE_GH:${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           else
             echo "No image build for this ref"
             exit 0
+          fi
+
+      # Prepare build args
+      - name: Prepare build args
+        id: build-args
+        run: |
+          if [[ -n "${{ github.event.inputs.xray_version }}" ]]; then
+            echo "ARGS=XRAY_VERSION=${{ github.event.inputs.xray_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "ARGS=" >> $GITHUB_OUTPUT
           fi
 
       # Build and push
@@ -60,3 +78,4 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.TAGS }}
+          build-args: ${{ steps.build-args.outputs.ARGS }}
