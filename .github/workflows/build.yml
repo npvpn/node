@@ -12,6 +12,11 @@ on:
         description: "Xray version (e.g. v24.12.18), leave empty for Dockerfile default"
         required: false
         default: ""
+      also_latest:
+        description: "Also publish as :latest (default: stable only)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-docker-image:
@@ -49,10 +54,16 @@ jobs:
           IMAGE_GH="ghcr.io/${{ github.repository_owner }}/node"
 
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "TAGS=$IMAGE_DH:latest,$IMAGE_GH:latest" >> $GITHUB_OUTPUT
+            # Manual run = production release. Always publishes :stable; optionally :latest.
+            TAGS="$IMAGE_DH:stable,$IMAGE_GH:stable"
+            if [[ "${{ github.event.inputs.also_latest }}" == "true" ]]; then
+              TAGS="$TAGS,$IMAGE_DH:latest,$IMAGE_GH:latest"
+            fi
+            echo "TAGS=$TAGS" >> $GITHUB_OUTPUT
           elif [[ "${GITHUB_REF}" == "refs/heads/dev" ]]; then
             echo "TAGS=$IMAGE_DH:dev,$IMAGE_GH:dev" >> $GITHUB_OUTPUT
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # Version tag = test channel (:latest + concrete version). Stable is manual-only.
             echo "TAGS=$IMAGE_DH:latest,$IMAGE_DH:${GITHUB_REF_NAME},$IMAGE_GH:latest,$IMAGE_GH:${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           else
             echo "No image build for this ref"

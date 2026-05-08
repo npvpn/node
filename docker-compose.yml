@@ -1,7 +1,7 @@
 services:
   marzban-node:
     # build: .
-    image: npvpn/node:latest
+    image: npvpn/node:stable
     restart: always
     network_mode: host
 
