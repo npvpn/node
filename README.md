@@ -1,6 +1,6 @@
 # npvpn node
 
-**npvpn node** — узел (node) для работы с [npvpn panel](https://github.com/npvpn/panel).  
+**npvpn node** — узел (node) для работы с [npvpn panel](https://github.com/npvpn/vpn-panel).  
 Предназначен для развёртывания VPN-конфигураций на базе XRay-Core и оптимизирован под высокие нагрузки, многопоточность и масштабирование в продакшене.
 
 ---
