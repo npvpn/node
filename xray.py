@@ -9,6 +9,9 @@ from contextlib import contextmanager
 from config import DEBUG, SSL_CERT_FILE, SSL_KEY_FILE, XRAY_API_HOST, XRAY_API_PORT, INBOUNDS
 from logger import logger
 
+# Сколько ждать выхода xray после SIGTERM, прежде чем слать SIGKILL.
+XRAY_STOP_TIMEOUT_SECONDS = 5
+
 
 class XRayConfig(dict):
     """
@@ -33,7 +36,7 @@ class XRayConfig(dict):
         return json.dumps(self, **json_kwargs)
 
     def _apply_logging(self):
-        # Ensure logs go to stdout/stderr by default so /logs can stream "accepted ..." lines
+        # Ensure logs go to stdout by default so /logs can stream "accepted ..." lines
         log = self.get("log") or {}
         if not self.get("log"):
             self["log"] = log
@@ -42,11 +45,12 @@ class XRayConfig(dict):
             log["loglevel"] = "warning"
         if log.get("loglevel") and not log.get("logLevel"):
             log["logLevel"] = log["loglevel"]
-        # Default sinks if not provided
+        # Default sinks if not provided. Error shares stdout so /logs drains it
+        # and a full stderr pipe cannot block the process.
         if not log.get("access"):
             log["access"] = "/dev/stdout"
         if not log.get("error"):
-            log["error"] = "/dev/stderr"
+            log["error"] = "/dev/stdout"
 
     def _apply_api(self):
         for inbound in self.get('inbounds', []).copy():
@@ -214,8 +218,8 @@ class XRayCore:
             cmd,
             env=self._env,
             stdin=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             universal_newlines=True
         )
         self.process.stdin.write(config.to_json())
@@ -229,10 +233,26 @@ class XRayCore:
             threading.Thread(target=func).start()
 
     def stop(self):
-        if not self.started:
+        process = self.process
+        if process is None:
             return
 
-        self.process.terminate()
+        if process.poll() is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=XRAY_STOP_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                process.wait()
+        else:
+            process.wait()
+
         self.process = None
         logger.warning("Xray core stopped")
 
