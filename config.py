@@ -20,3 +20,6 @@ DEBUG = config("DEBUG", cast=bool, default=False)
 SERVICE_PROTOCOL = config('SERVICE_PROTOCOL', cast=str, default='rest')
 
 INBOUNDS = config("INBOUNDS", cast=lambda v: [x.strip() for x in v.split(',')] if v else [], default="")
+
+HAPROXY_PILOT_POLICY = config("HAPROXY_PILOT_POLICY", default="")
+HAPROXY_PILOT_STATE_DIR = config("HAPROXY_PILOT_STATE_DIR", default="/var/lib/marzban-node/haproxy-pilot")

@@ -1,6 +1,9 @@
 import asyncio
 import json
 import time
+from contextlib import asynccontextmanager, contextmanager
+from functools import partial
+from threading import Lock
 from uuid import UUID, uuid4
 
 from fastapi import (APIRouter, Body, FastAPI, HTTPException, Request,
@@ -10,11 +13,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
-from config import XRAY_ASSETS_PATH, XRAY_EXECUTABLE_PATH
+from config import HAPROXY_PILOT_POLICY, HAPROXY_PILOT_STATE_DIR, XRAY_ASSETS_PATH, XRAY_EXECUTABLE_PATH
+from haproxy_pilot import Conflict, Pilot, Rejected
+from haproxy_runtime import Command, Model
 from logger import logger
 from xray import XRayConfig, XRayCore
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app):
+    service.enable_pilot()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
@@ -26,6 +37,18 @@ def validation_exception_handler(request: Request, exc: RequestValidationError):
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=jsonable_encoder({"detail": details}),
     )
+
+
+class PilotSession(Model):
+    session_id: UUID
+
+
+class PilotCommand(Command, PilotSession):
+    pass
+
+
+class PilotResult(PilotSession):
+    operation_id: UUID
 
 
 class Service(object):
@@ -41,6 +64,8 @@ class Service(object):
         )
         self.core_version = self.core.get_version()
         self.config = None
+        self.pilot = None
+        self._session_lock = Lock()
 
         self.router.add_api_route("/", self.base, methods=["POST"])
         self.router.add_api_route("/ping", self.ping, methods=["POST"])
@@ -49,6 +74,11 @@ class Service(object):
         self.router.add_api_route("/start", self.start, methods=["POST"])
         self.router.add_api_route("/stop", self.stop, methods=["POST"])
         self.router.add_api_route("/restart", self.restart, methods=["POST"])
+
+        self.router.add_api_route("/haproxy-pilot/status", self.pilot_status, methods=["POST"])
+        self.router.add_api_route("/haproxy-pilot/validate", self.pilot_validate, methods=["POST"])
+        self.router.add_api_route("/haproxy-pilot/apply", self.pilot_apply, methods=["POST"])
+        self.router.add_api_route("/haproxy-pilot/result", self.pilot_result, methods=["POST"])
 
         self.router.add_websocket_route("/logs", self.logs)
 
@@ -69,11 +99,57 @@ class Service(object):
         }
 
     def base(self):
-        return self.response()
+        return self.response(**({"capabilities": {"haproxy_pilot": 1}} if self.pilot else {}))
+
+    def enable_pilot(self):
+        if HAPROXY_PILOT_POLICY:
+            try:
+                self.pilot = Pilot(HAPROXY_PILOT_POLICY, HAPROXY_PILOT_STATE_DIR)
+            except Exception:
+                logger.exception("Could not initialize HAProxy pilot")
+
+    def _session_pilot(self, session):
+        self.match_session_id(session.session_id)
+        if self.pilot is None:
+            raise HTTPException(404, "HAProxy pilot is disabled")
+        return self.pilot
+
+    @contextmanager
+    def _pilot_admission(self, session_id):
+        with self._session_lock:
+            self.match_session_id(session_id)
+            yield
+
+    def pilot_status(self, request: PilotSession):
+        return self._session_pilot(request).status(partial(self._pilot_admission, request.session_id))
+
+    def _pilot_command(self, request, validate):
+        pilot = self._session_pilot(request)
+        command = request.model_dump(exclude={"session_id"})
+        try:
+            method = pilot.validate if validate else pilot.apply
+            return method(command, partial(self._pilot_admission, request.session_id))
+        except Conflict as error:
+            raise HTTPException(409, str(error)) from error
+        except Rejected as error:
+            raise HTTPException(422, str(error)) from error
+
+    def pilot_validate(self, request: PilotCommand):
+        return self._pilot_command(request, validate=True)
+
+    def pilot_apply(self, request: PilotCommand):
+        return self._pilot_command(request, validate=False)
+
+    def pilot_result(self, request: PilotResult):
+        result = self._session_pilot(request).result(request.operation_id, partial(self._pilot_admission, request.session_id))
+        if result is None:
+            raise HTTPException(404, "Unknown operation")
+        return result
 
     def connect(self, request: Request):
-        self.session_id = uuid4()
-        self.client_ip = request.client.host
+        with self._session_lock:
+            self.session_id = uuid4()
+            self.client_ip = request.client.host
 
         if self.connected:
             logger.warning(
@@ -95,9 +171,10 @@ class Service(object):
         if self.connected:
             logger.info(f'{self.client_ip} disconnected, Session ID = "{self.session_id}".')
 
-        self.session_id = None
-        self.client_ip = None
-        self.connected = False
+        with self._session_lock:
+            self.session_id = None
+            self.client_ip = None
+            self.connected = False
 
         if self.core.started:
             try:
