@@ -23,7 +23,9 @@ FROM python:$PYTHON_VERSION-slim
 ENV PYTHON_LIB_PATH=/usr/local/lib/python${PYTHON_VERSION%.*}/site-packages
 WORKDIR /code
 
-RUN rm -rf $PYTHON_LIB_PATH/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends haproxy \
+    && rm -rf /var/lib/apt/lists/* $PYTHON_LIB_PATH/*
 
 COPY --from=build $PYTHON_LIB_PATH $PYTHON_LIB_PATH
 COPY --from=build /usr/local/bin /usr/local/bin
